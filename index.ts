@@ -3,24 +3,37 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { CYCLES, EVIDENCE_KINDS, EvidenceServer } from './lib.js';
-import { SERVER_VERSION } from './version.js';
+import { CYCLES, EVIDENCE_KINDS, EvidenceServer } from "./lib.js";
+import { SERVER_VERSION } from "./version.js";
 
-const coercedBoolean = z.union([z.boolean(), z.string()]).transform((val, ctx) => {
-  if (typeof val === "boolean") return val;
-  if (val.toLowerCase() === "true") return true;
-  if (val.toLowerCase() === "false") return false;
-  ctx.addIssue({ code: "custom", message: `Expected boolean or "true"/"false" string, received "${val}"` });
-  return z.NEVER;
-});
+const coercedBoolean = z
+  .union([z.boolean(), z.string()])
+  .transform((val, ctx) => {
+    if (typeof val === "boolean") return val;
+    if (val.toLowerCase() === "true") return true;
+    if (val.toLowerCase() === "false") return false;
+    ctx.addIssue({
+      code: "custom",
+      message: `Expected boolean or "true"/"false" string, received "${val}"`,
+    });
+    return z.NEVER;
+  });
 
 const cycleSchema = z.enum(CYCLES);
 const evidenceKindSchema = z.enum(EVIDENCE_KINDS);
 
 const evidenceItemSchema = z.object({
-  kind: evidenceKindSchema.describe("Kind of evidence: observation, document, test, reasoning, external"),
-  ref: z.string().optional().describe("Path, URL, or command that yielded the evidence"),
-  summary: z.string().min(1).describe("What the evidence shows, in one or two sentences"),
+  kind: evidenceKindSchema.describe(
+    "Kind of evidence: observation, document, test, reasoning, external",
+  ),
+  ref: z
+    .string()
+    .optional()
+    .describe("Path, URL, or command that yielded the evidence"),
+  summary: z
+    .string()
+    .min(1)
+    .describe("What the evidence shows, in one or two sentences"),
 });
 
 const server = new McpServer({
@@ -65,23 +78,52 @@ Rules:
     inputSchema: {
       cycle: cycleSchema.describe("Lifecycle state of this claim"),
       branchId: z.string().min(1).describe("Evidence branch id, e.g. '1', '2'"),
-      sourceThoughtNumber: z.coerce.number().int().min(1)
+      sourceThoughtNumber: z.coerce
+        .number()
+        .int()
+        .min(1)
         .describe("sequential-thinking thoughtNumber this claim comes from"),
-      sourceBranchId: z.string().optional()
+      sourceBranchId: z
+        .string()
+        .optional()
         .describe("sequential-thinking branchId, omit for the main line"),
-      derivedFromBranchId: z.string().optional()
+      derivedFromBranchId: z
+        .string()
+        .optional()
         .describe("Evidence branchId this branch derives from"),
-      claim: z.string().min(1).describe("One falsifiable sentence under inspection"),
-      inspection: z.string().min(1).describe("What is being inspected now, or the inspection plan when proposed"),
-      evidence: z.array(evidenceItemSchema).optional()
+      claim: z
+        .string()
+        .min(1)
+        .describe("One falsifiable sentence under inspection"),
+      inspection: z
+        .string()
+        .min(1)
+        .describe(
+          "What is being inspected now, or the inspection plan when proposed",
+        ),
+      evidence: z
+        .array(evidenceItemSchema)
+        .optional()
         .describe("Evidence collected so far. Required for validated"),
-      confidence: z.coerce.number().min(0).max(1).optional()
+      confidence: z.coerce
+        .number()
+        .min(0)
+        .max(1)
+        .optional()
         .describe("Confidence in the claim, 0 to 1"),
-      rejectionReason: z.string().optional()
+      rejectionReason: z
+        .string()
+        .optional()
         .describe("Why the claim was rejected. Required for rejected"),
-      needsMoreInspect: coercedBoolean.describe("Whether more inspection is needed in this session"),
-      finalConclusion: z.string().optional()
-        .describe("Final conclusion once every branch is validated or rejected"),
+      needsMoreInspect: coercedBoolean.describe(
+        "Whether more inspection is needed in this session",
+      ),
+      finalConclusion: z
+        .string()
+        .optional()
+        .describe(
+          "Final conclusion once every branch is validated or rejected",
+        ),
     },
     annotations: {
       readOnlyHint: true,
@@ -94,13 +136,15 @@ Rules:
       cycle: cycleSchema,
       sourceThoughtNumber: z.number(),
       needsMoreInspect: z.boolean(),
-      branches: z.array(z.object({
-        branchId: z.string(),
-        cycle: cycleSchema,
-        claim: z.string(),
-        sourceThoughtNumber: z.number(),
-        confidence: z.number().optional(),
-      })),
+      branches: z.array(
+        z.object({
+          branchId: z.string(),
+          cycle: cycleSchema,
+          claim: z.string(),
+          sourceThoughtNumber: z.number(),
+          confidence: z.number().optional(),
+        }),
+      ),
       unresolvedBranchIds: z.array(z.string()),
       historyLength: z.number(),
       nextAction: z.string(),
@@ -120,7 +164,7 @@ Rules:
       content: result.content,
       structuredContent: parsedContent,
     };
-  }
+  },
 );
 
 async function runServer() {
