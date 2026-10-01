@@ -44,17 +44,48 @@ describe.skipIf(!existsSync(distIndexPath))(
           "sourceThoughtNumber",
           "claim",
           "inspection",
+          "claimBasis",
           "needsMoreInspect",
         ]),
       );
       expect(tool!.inputSchema.required).not.toEqual(
         expect.arrayContaining([
           "evidence",
-          "confidence",
           "rejectionReason",
           "finalConclusion",
         ]),
       );
+    });
+
+    it("rejects a call without claimBasis", async () => {
+      const result = await client.callTool({
+        name: "sequentialthinking-evidence",
+        arguments: {
+          cycle: "proposed",
+          branchId: "3",
+          sourceThoughtNumber: 1,
+          claim: "X",
+          inspection: "plan",
+          needsMoreInspect: true,
+        },
+      });
+      expect(result.isError).toBe(true);
+    });
+
+    it("rejects an unknown claimBasis value", async () => {
+      const result = await client.callTool({
+        name: "sequentialthinking-evidence",
+        arguments: {
+          cycle: "proposed",
+          branchId: "3",
+          sourceThoughtNumber: 1,
+          claim: "X",
+          inspection: "plan",
+          claimBasis: "guess",
+          needsMoreInspect: true,
+        },
+      });
+      expect(result.isError).toBe(true);
     });
 
     it("accepts string coercion for needsMoreInspect and numbers", async () => {
@@ -66,6 +97,7 @@ describe.skipIf(!existsSync(distIndexPath))(
           sourceThoughtNumber: "3",
           claim: "X",
           inspection: "plan",
+          claimBasis: "fact",
           needsMoreInspect: "True",
         },
       });
@@ -87,6 +119,7 @@ describe.skipIf(!existsSync(distIndexPath))(
           sourceThoughtNumber: 1,
           claim: "X",
           inspection: "plan",
+          claimBasis: "fact",
           needsMoreInspect: true,
         },
       });
@@ -102,6 +135,7 @@ describe.skipIf(!existsSync(distIndexPath))(
           sourceThoughtNumber: 3,
           claim: "X",
           inspection: "plan",
+          claimBasis: "fact",
           needsMoreInspect: true,
         },
       });

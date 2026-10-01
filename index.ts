@@ -3,7 +3,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { CYCLES, EVIDENCE_KINDS, EvidenceServer } from "./lib.js";
+import { CLAIM_BASIS_KINDS, CYCLES, EVIDENCE_KINDS, EvidenceServer } from "./lib.js";
 import { SERVER_VERSION } from "./version.js";
 
 const coercedBoolean = z
@@ -24,7 +24,11 @@ const evidenceKindSchema = z.enum(EVIDENCE_KINDS);
 
 const evidenceItemSchema = z.object({
   kind: evidenceKindSchema.describe(
-    "Kind of evidence: observation, document, test, reasoning, external",
+    "Kind of evidence:\n" +
+      "- referenced: read from docs/source/spec\n" +
+      "- measured: produced by running a test, command, or metric\n" +
+      "- observed: seen directly (logs, UI, behavior)\n" +
+      "- guessed: not directly confirmed; reasoned or estimated",
   ),
   ref: z
     .string()
@@ -47,15 +51,14 @@ server.registerTool(
   "sequentialthinking-evidence",
   {
     title: "Sequential Thinking Evidence",
-    description: `Companion tool for sequential-thinking. Records whether each thought is backed by evidence.
+    description: `Companion tool for sequential-thinking. Check whether each thought is backed by evidence.
 
-Call this tool right after any sequential-thinking call whose thought contains a hypothesis,
-an assumption, or a conclusion. Do not skip it.
+Call this tool right after any sequential-thinking issued a "thought".
 
-Lifecycle per claim (branchId):
+Lifecycle of claim (branchId):
 - proposed: register the claim taken from the thought. Set sourceThoughtNumber.
 - testing: report what you inspected. Add evidence items as you find them.
-- validated: requires at least one evidence item. Give confidence 0..1.
+- validated: requires at least one evidence item that is not kind=guessed, and claimBasis=fact|inference.
 - rejected: requires rejectionReason. Start a new branch with derivedFromBranchId if you pivot.
 
 Allowed transitions:
@@ -67,6 +70,7 @@ Allowed transitions:
 
 Rules:
 - One branchId per claim. Reuse it across cycles of the same claim.
+- Set claimBasis on every call: fact | assumption | inference | opinion.
 - sourceThoughtNumber is the sequential-thinking thoughtNumber the claim comes from.
   sourceBranchId is the sequential-thinking branchId; omit it for the main line.
 - needsMoreInspect=true while any branch is still proposed or testing.
@@ -105,12 +109,11 @@ Rules:
         .array(evidenceItemSchema)
         .optional()
         .describe("Evidence collected so far. Required for validated"),
-      confidence: z.coerce
-        .number()
-        .min(0)
-        .max(1)
-        .optional()
-        .describe("Confidence in the claim, 0 to 1"),
+      claimBasis: z
+        .enum(CLAIM_BASIS_KINDS)
+        .describe(
+          "Basis of the claim: fact | assumption | inference | opinion. validated requires fact or inference",
+        ),
       rejectionReason: z
         .string()
         .optional()
@@ -142,7 +145,7 @@ Rules:
           cycle: cycleSchema,
           claim: z.string(),
           sourceThoughtNumber: z.number(),
-          confidence: z.number().optional(),
+          claimBasis: z.enum(CLAIM_BASIS_KINDS).optional(),
         }),
       ),
       unresolvedBranchIds: z.array(z.string()),

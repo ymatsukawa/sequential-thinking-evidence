@@ -25,10 +25,11 @@ const base: EvidenceEntry = {
   sourceThoughtNumber: 1,
   claim: "X holds",
   inspection: "check X",
+  claimBasis: "fact",
   needsMoreInspect: true,
 };
 
-const evidence = [{ kind: "test" as const, summary: "ok" }];
+const evidence = [{ kind: "measured" as const, summary: "ok" }];
 
 function parse(
   result: ReturnType<EvidenceServer["processEntry"]>,
@@ -126,6 +127,63 @@ describe("EvidenceServer", () => {
         evidence: [],
       });
       expect(result.isError).toBe(true);
+    });
+
+    it.each(["assumption", "opinion"] as const)(
+      "rejects validated with claimBasis=%s",
+      (claimBasis) => {
+        const server = seeded("testing");
+        const result = server.processEntry({
+          ...base,
+          cycle: "validated",
+          evidence,
+          claimBasis,
+        });
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toContain(
+          "validated requires claimBasis=fact or inference",
+        );
+      },
+    );
+
+    it("rejects validated with only guessed evidence", () => {
+      const server = seeded("testing");
+      const result = server.processEntry({
+        ...base,
+        cycle: "validated",
+        evidence: [
+          { kind: "guessed", summary: "follows from A" },
+          { kind: "guessed", summary: "follows from B" },
+        ],
+      });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain(
+        "validated requires at least one non-guessed evidence",
+      );
+    });
+
+    it("accepts validated with guessed plus non-guessed evidence", () => {
+      const server = seeded("testing");
+      const result = server.processEntry({
+        ...base,
+        cycle: "validated",
+        evidence: [
+          { kind: "guessed", summary: "follows from A" },
+          { kind: "observed", summary: "seen in logs" },
+        ],
+      });
+      expect(result.isError).toBeUndefined();
+    });
+
+    it("accepts validated with claimBasis=inference", () => {
+      const server = seeded("testing");
+      const result = server.processEntry({
+        ...base,
+        cycle: "validated",
+        evidence,
+        claimBasis: "inference",
+      });
+      expect(result.isError).toBeUndefined();
     });
 
     it("rejects rejected without rejectionReason", () => {
@@ -240,26 +298,28 @@ describe("EvidenceServer", () => {
           cycle: "validated",
           claim: "X holds",
           sourceThoughtNumber: 1,
+          claimBasis: "fact",
         },
         {
           branchId: "2",
           cycle: "proposed",
           claim: "Y",
           sourceThoughtNumber: 4,
+          claimBasis: "fact",
         },
       ]);
     });
 
-    it("includes confidence in the summary when given", () => {
+    it("includes claimBasis in the summary", () => {
       const server = seeded("testing");
       const result = server.processEntry({
         ...base,
         cycle: "validated",
         evidence,
-        confidence: 0.8,
+        claimBasis: "inference",
         needsMoreInspect: true,
       });
-      expect(parse(result).branches[0].confidence).toBe(0.8);
+      expect(parse(result).branches[0].claimBasis).toBe("inference");
     });
 
     it("echoes finalConclusion", () => {
@@ -344,7 +404,6 @@ describe("EvidenceServer", () => {
         ...base,
         cycle: "validated",
         evidence,
-        confidence: 0.9,
         needsMoreInspect: false,
         finalConclusion: "X holds",
       });
@@ -373,7 +432,7 @@ describe("EvidenceServer", () => {
       spy.mockRestore();
     });
 
-    it("logs evidence, rejection, confidence and final lines", () => {
+    it("logs evidence, rejection, claimBasis and final lines", () => {
       delete process.env.DISABLE_EVIDENCE_LOGGING;
       const server = new EvidenceServer();
       const spy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -381,7 +440,9 @@ describe("EvidenceServer", () => {
       server.processEntry({
         ...base,
         cycle: "testing",
-        evidence: [{ kind: "document", ref: "README.md", summary: "says so" }],
+        evidence: [
+          { kind: "referenced", ref: "README.md", summary: "says so" },
+        ],
       });
       server.processEntry({
         ...base,
@@ -397,8 +458,9 @@ describe("EvidenceServer", () => {
         cycle: "proposed",
       });
       const all = spy.mock.calls.map((c) => c[0] as string).join("\n");
-      expect(all).toContain("evidence[document]: says so (README.md)");
+      expect(all).toContain("evidence[referenced]: says so (README.md)");
       expect(all).toContain("rejected: contradicted");
+      expect(all).toContain("claimBasis: fact");
       expect(all).toContain("final: X is false");
       expect(all).toContain("derived from branch 1");
       spy.mockRestore();

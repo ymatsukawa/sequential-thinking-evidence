@@ -3,8 +3,11 @@ import chalk from 'chalk';
 export const CYCLES = ['proposed', 'testing', 'validated', 'rejected'] as const;
 export type Cycle = (typeof CYCLES)[number];
 
-export const EVIDENCE_KINDS = ['observation', 'document', 'test', 'reasoning', 'external'] as const;
+export const EVIDENCE_KINDS = ['referenced', 'measured', 'observed', 'guessed'] as const;
 export type EvidenceKind = (typeof EVIDENCE_KINDS)[number];
+
+export const CLAIM_BASIS_KINDS = ['fact', 'assumption', 'inference', 'opinion'] as const;
+export type ClaimBasisKind = (typeof CLAIM_BASIS_KINDS)[number];
 
 export interface EvidenceItem {
   kind: EvidenceKind;
@@ -21,7 +24,7 @@ export interface EvidenceEntry {
   claim: string;
   inspection: string;
   evidence?: EvidenceItem[];
-  confidence?: number;
+  claimBasis: ClaimBasisKind;
   rejectionReason?: string;
   needsMoreInspect: boolean;
   finalConclusion?: string;
@@ -32,7 +35,7 @@ export interface BranchSummary {
   cycle: Cycle;
   claim: string;
   sourceThoughtNumber: number;
-  confidence?: number;
+  claimBasis?: ClaimBasisKind;
 }
 
 export interface EvidenceResponse {
@@ -108,6 +111,12 @@ export class EvidenceServer {
     if (entry.cycle === 'validated' && !entry.evidence?.length) {
       return `validated requires at least one evidence item on branch ${entry.branchId}. Add evidence[] or use cycle=testing`;
     }
+    if (entry.cycle === 'validated' && entry.evidence?.every((v) => v.kind === 'guessed')) {
+      return `validated requires at least one non-guessed evidence item (referenced, measured, or observed) on branch ${entry.branchId}. Keep cycle=testing until you have one`;
+    }
+    if (entry.cycle === 'validated' && entry.claimBasis !== 'fact' && entry.claimBasis !== 'inference') {
+      return `validated requires claimBasis=fact or inference on branch ${entry.branchId} (got ${entry.claimBasis}). Keep cycle=testing until claimBasis is fact or inference`;
+    }
     if (entry.cycle === 'rejected' && !entry.rejectionReason?.trim()) {
       return `rejected requires rejectionReason on branch ${entry.branchId}`;
     }
@@ -154,7 +163,7 @@ export class EvidenceServer {
         cycle: last.cycle,
         claim: last.claim,
         sourceThoughtNumber: last.sourceThoughtNumber,
-        ...(last.confidence !== undefined ? { confidence: last.confidence } : {}),
+        claimBasis: last.claimBasis,
       };
     });
   }
@@ -177,7 +186,7 @@ export class EvidenceServer {
       `inspection: ${e.inspection}`,
       ...(e.evidence ?? []).map((v) => `evidence[${v.kind}]: ${v.summary}${v.ref ? ` (${v.ref})` : ''}`),
       ...(e.rejectionReason ? [`rejected: ${e.rejectionReason}`] : []),
-      ...(e.confidence !== undefined ? [`confidence: ${e.confidence}`] : []),
+      `claimBasis: ${e.claimBasis}`,
       ...(e.finalConclusion !== undefined ? [`final: ${e.finalConclusion}`] : []),
     ];
 
