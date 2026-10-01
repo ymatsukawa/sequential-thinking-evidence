@@ -9,11 +9,9 @@ export type EvidenceKind = (typeof EVIDENCE_KINDS)[number];
 export const CLAIM_BASIS_KINDS = ['fact', 'assumption', 'inference', 'opinion'] as const;
 export type ClaimBasisKind = (typeof CLAIM_BASIS_KINDS)[number];
 
-export interface EvidenceItem {
-  kind: EvidenceKind;
-  ref?: string;
-  summary: string;
-}
+export type EvidenceItem =
+  | { kind: 'guessed'; ref?: string; summary: string }
+  | { kind: Exclude<EvidenceKind, 'guessed'>; ref: string; summary: string };
 
 export interface EvidenceEntry {
   cycle: Cycle;
@@ -28,6 +26,7 @@ export interface EvidenceEntry {
   rejectionReason?: string;
   needsMoreInspect: boolean;
   finalConclusion?: string;
+  newSession?: boolean;
 }
 
 export interface BranchSummary {
@@ -36,6 +35,7 @@ export interface BranchSummary {
   claim: string;
   sourceThoughtNumber: number;
   claimBasis?: ClaimBasisKind;
+  evidenceCount: number;
 }
 
 export interface EvidenceResponse {
@@ -48,6 +48,7 @@ export interface EvidenceResponse {
   historyLength: number;
   nextAction: string;
   finalConclusion?: string;
+  discardedBranchIds: string[];
 }
 
 export type ToolResult = {
@@ -91,7 +92,6 @@ export class EvidenceServer {
     return this.latest(branchId)?.cycle ?? 'new';
   }
 
-  /** Branch ids still proposed/testing, computed as if `pending` were already applied. */
   private unresolvedBranchIds(pending?: EvidenceEntry): string[] {
     const ids = new Set(Object.keys(this.branches));
     if (pending) ids.add(pending.branchId);
@@ -101,6 +101,10 @@ export class EvidenceServer {
     });
   }
 
+  private evidenceOf(branchId: string): EvidenceItem[] {
+    return (this.branches[branchId] ?? []).flatMap((e) => e.evidence ?? []);
+  }
+
   private validate(entry: EvidenceEntry): string | null {
     const prev = this.currentCycle(entry.branchId);
     if (!ALLOWED_TRANSITIONS[prev].has(entry.cycle)) {
@@ -108,11 +112,23 @@ export class EvidenceServer {
       const from = prev === 'new' ? 'a new branch' : prev;
       return `Invalid transition ${from} -> ${entry.cycle} on branch ${entry.branchId}. Allowed next cycle: ${allowed}`;
     }
-    if (entry.cycle === 'validated' && !entry.evidence?.length) {
-      return `validated requires at least one evidence item on branch ${entry.branchId}. Add evidence[] or use cycle=testing`;
+    const first = this.branches[entry.branchId]?.[0];
+    if (first && first.claim !== entry.claim) {
+      return `claim of branch ${entry.branchId} is fixed at proposed ("${first.claim}"). Reject it and start a new branch with derivedFromBranchId to change the claim`;
     }
-    if (entry.cycle === 'validated' && entry.evidence?.every((v) => v.kind === 'guessed')) {
-      return `validated requires at least one non-guessed evidence item (referenced, measured, or observed) on branch ${entry.branchId}. Keep cycle=testing until you have one`;
+    if (first && first.sourceThoughtNumber !== entry.sourceThoughtNumber) {
+      return `sourceThoughtNumber of branch ${entry.branchId} is fixed at ${first.sourceThoughtNumber}. Reject it and start a new branch with derivedFromBranchId to change the source`;
+    }
+    if (first && first.sourceBranchId !== entry.sourceBranchId) {
+      const fixed = first.sourceBranchId ?? '(main line, omitted)';
+      return `sourceBranchId of branch ${entry.branchId} is fixed at ${fixed}. Reject it and start a new branch with derivedFromBranchId to change the source`;
+    }
+    const collected = [...this.evidenceOf(entry.branchId), ...(entry.evidence ?? [])];
+    if (entry.cycle === 'validated' && !collected.length) {
+      return `validated requires at least one evidence item collected on branch ${entry.branchId}. Add evidence[] or use cycle=testing`;
+    }
+    if (entry.cycle === 'validated' && collected.every((v) => v.kind === 'guessed')) {
+      return `validated requires at least one non-guessed evidence item (referenced, measured, or observed) collected on branch ${entry.branchId}. Keep cycle=testing until you have one`;
     }
     if (entry.cycle === 'validated' && entry.claimBasis !== 'fact' && entry.claimBasis !== 'inference') {
       return `validated requires claimBasis=fact or inference on branch ${entry.branchId} (got ${entry.claimBasis}). Keep cycle=testing until claimBasis is fact or inference`;
@@ -150,7 +166,10 @@ export class EvidenceServer {
     }
     const unresolved = this.unresolvedBranchIds();
     if (unresolved.length > 0) {
-      return `Resolve branches [${unresolved.join(', ')}] before finishing sequentialthinking`;
+      return (
+        `Resolve branches [${unresolved.join(', ')}] before finishing sequentialthinking. ` +
+        'If they belong to an abandoned task, call cycle=proposed with newSession=true'
+      );
     }
     return 'All branches resolved. Call again with finalConclusion and needsMoreInspect=false';
   }
@@ -164,6 +183,7 @@ export class EvidenceServer {
         claim: last.claim,
         sourceThoughtNumber: last.sourceThoughtNumber,
         claimBasis: last.claimBasis,
+        evidenceCount: this.evidenceOf(branchId).length,
       };
     });
   }
@@ -209,10 +229,27 @@ export class EvidenceServer {
     };
   }
 
+  private reset(): string[] {
+    const ids = Object.keys(this.branches);
+    this.history = [];
+    this.branches = {};
+    return ids;
+  }
+
   public processEntry(input: EvidenceEntry): ToolResult {
     try {
+      if (input.newSession && input.cycle !== 'proposed') {
+        return this.failure(`newSession=true is allowed only with cycle=proposed (got ${input.cycle})`);
+      }
+
+      const saved = { history: this.history, branches: this.branches };
+      const discarded = input.newSession ? this.reset() : [];
       const error = this.validate(input);
-      if (error) return this.failure(error);
+      if (error) {
+        this.history = saved.history;
+        this.branches = saved.branches;
+        return this.failure(error);
+      }
 
       this.history.push(input);
       (this.branches[input.branchId] ??= []).push(input);
@@ -231,7 +268,12 @@ export class EvidenceServer {
         historyLength: this.history.length,
         nextAction: this.nextAction(input),
         ...(input.finalConclusion !== undefined ? { finalConclusion: input.finalConclusion } : {}),
+        discardedBranchIds: discarded,
       };
+
+      if (input.finalConclusion !== undefined) {
+        this.reset();
+      }
 
       return {
         content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }],

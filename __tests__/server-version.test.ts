@@ -57,3 +57,54 @@ describe("server version", () => {
     },
   );
 });
+
+describe.skipIf(!existsSync(distIndexPath))("server contract", () => {
+  async function withClient(run: (client: Client) => Promise<void>) {
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [distIndexPath],
+      cwd: packageRoot,
+      stderr: "pipe",
+    });
+    const client = new Client({ name: "contract-smoke", version: "0.0.0" });
+    try {
+      await client.connect(transport);
+      await run(client);
+    } finally {
+      await client.close();
+    }
+  }
+
+  it("reports the companion workflow in server instructions", async () => {
+    await withClient(async (client) => {
+      const instructions = client.getInstructions();
+      expect(instructions).toContain("sequential-thinking");
+      expect(instructions).toContain("cycle=proposed");
+      expect(instructions).toContain("newSession=true");
+      expect(instructions).toContain("nextThoughtNeeded=false");
+      expect(instructions).toContain("finalConclusion");
+    });
+  });
+
+  it("marks the tool as stateful in annotations", async () => {
+    await withClient(async (client) => {
+      const { tools } = await client.listTools();
+      const tool = tools.find((t) => t.name === "sequentialthinking-evidence");
+      expect(tool?.annotations).toEqual({
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      });
+    });
+  });
+
+  it("keeps the workflow out of the tool description", async () => {
+    await withClient(async (client) => {
+      const { tools } = await client.listTools();
+      const tool = tools.find((t) => t.name === "sequentialthinking-evidence");
+      expect(tool?.description).not.toContain("nextThoughtNeeded");
+      expect(tool?.description).not.toContain("right after any");
+    });
+  });
+});

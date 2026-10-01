@@ -53,8 +53,32 @@ describe.skipIf(!existsSync(distIndexPath))(
           "evidence",
           "rejectionReason",
           "finalConclusion",
+          "newSession",
         ]),
       );
+    });
+
+    it("accepts string coercion for newSession", async () => {
+      const result = await client.callTool({
+        name: "sequentialthinking-evidence",
+        arguments: {
+          cycle: "proposed",
+          branchId: "9",
+          sourceThoughtNumber: 1,
+          claim: "X",
+          inspection: "plan",
+          claimBasis: "fact",
+          needsMoreInspect: true,
+          newSession: "true",
+        },
+      });
+      expect(result.isError).toBeFalsy();
+      const structured = result.structuredContent as {
+        historyLength: number;
+        discardedBranchIds: string[];
+      };
+      expect(structured.historyLength).toBe(1);
+      expect(Array.isArray(structured.discardedBranchIds)).toBe(true);
     });
 
     it("rejects a call without claimBasis", async () => {
@@ -108,6 +132,113 @@ describe.skipIf(!existsSync(distIndexPath))(
       };
       expect(structured.needsMoreInspect).toBe(true);
       expect(structured.sourceThoughtNumber).toBe(3);
+    });
+
+    describe("blank strings and ref", () => {
+      const proposed = {
+        cycle: "proposed",
+        sourceThoughtNumber: 1,
+        claim: "X",
+        inspection: "plan",
+        claimBasis: "fact",
+        needsMoreInspect: true,
+      };
+      const call = (args: Record<string, unknown>) =>
+        client.callTool({
+          name: "sequentialthinking-evidence",
+          arguments: { ...proposed, ...args },
+        });
+      const textOf = (result: Awaited<ReturnType<typeof call>>) =>
+        (result.content as Array<{ type: string; text: string }>)[0].text;
+
+      it("requires ref for every kind except guessed in the JSON Schema", async () => {
+        const { tools } = await client.listTools();
+        const tool = tools.find(
+          (t) => t.name === "sequentialthinking-evidence",
+        )!;
+        const evidence = tool.inputSchema.properties!.evidence as {
+          items: {
+            oneOf: Array<{
+              properties: { kind: { const?: string; enum?: string[] } };
+              required: string[];
+            }>;
+          };
+        };
+        const [guessed, others] = evidence.items.oneOf;
+        expect(guessed.properties.kind.const).toBe("guessed");
+        expect(guessed.required).not.toContain("ref");
+        expect(others.properties.kind.enum).toEqual([
+          "referenced",
+          "measured",
+          "observed",
+        ]);
+        expect(others.required).toContain("ref");
+      });
+
+      it.each([
+        ["claim", { claim: "   " }],
+        ["inspection", { inspection: "\n\t" }],
+        ["rejectionReason", { rejectionReason: " " }],
+        ["finalConclusion", { finalConclusion: " " }],
+        [
+          "evidence summary",
+          { evidence: [{ kind: "guessed", summary: "  " }] },
+        ],
+      ])("rejects a blank %s", async (_, args) => {
+        const result = await call({ branchId: "b1", ...args });
+        expect(result.isError).toBe(true);
+        expect(textOf(result)).toContain(
+          "Must not be empty or whitespace only",
+        );
+      });
+
+      it.each(["referenced", "measured", "observed"])(
+        "rejects kind=%s without ref",
+        async (kind) => {
+          const result = await call({
+            branchId: "b2",
+            evidence: [{ kind, summary: "tests failed" }],
+          });
+          expect(result.isError).toBe(true);
+          expect(textOf(result)).toContain(
+            "ref is required unless kind=guessed",
+          );
+        },
+      );
+
+      it("rejects a blank ref", async () => {
+        const result = await call({
+          branchId: "b3",
+          evidence: [{ kind: "measured", ref: "  ", summary: "tests failed" }],
+        });
+        expect(result.isError).toBe(true);
+        expect(textOf(result)).toContain("ref is required unless kind=guessed");
+      });
+
+      it("accepts kind=guessed without ref", async () => {
+        const result = await call({
+          branchId: "g1",
+          evidence: [{ kind: "guessed", summary: "follows from A" }],
+        });
+        expect(result.isError).toBeFalsy();
+      });
+
+      it("accepts kind=measured with ref and trims the strings", async () => {
+        const result = await call({
+          branchId: "m1",
+          claim: "  X holds  ",
+          evidence: [
+            { kind: "measured", ref: " npm test ", summary: "all passed" },
+          ],
+        });
+        expect(result.isError).toBeFalsy();
+        const structured = result.structuredContent as {
+          branches: Array<{ branchId: string; claim: string }>;
+        };
+        expect(
+          structured.branches.find((b) => b.branchId === "m1")!.claim,
+        ).toBe("X holds");
+      });
     });
 
     it("rejects an unknown cycle value", async () => {

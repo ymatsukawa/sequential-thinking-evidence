@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   EvidenceServer,
   EvidenceEntry,
+  EvidenceItem,
   EvidenceResponse,
   Cycle,
 } from "../lib.js";
@@ -29,7 +30,9 @@ const base: EvidenceEntry = {
   needsMoreInspect: true,
 };
 
-const evidence = [{ kind: "measured" as const, summary: "ok" }];
+const evidence: EvidenceItem[] = [
+  { kind: "measured", ref: "npm test", summary: "ok" },
+];
 
 function parse(
   result: ReturnType<EvidenceServer["processEntry"]>,
@@ -169,7 +172,7 @@ describe("EvidenceServer", () => {
         cycle: "validated",
         evidence: [
           { kind: "guessed", summary: "follows from A" },
-          { kind: "observed", summary: "seen in logs" },
+          { kind: "observed", ref: "server.log", summary: "seen in logs" },
         ],
       });
       expect(result.isError).toBeUndefined();
@@ -299,6 +302,7 @@ describe("EvidenceServer", () => {
           claim: "X holds",
           sourceThoughtNumber: 1,
           claimBasis: "fact",
+          evidenceCount: 1,
         },
         {
           branchId: "2",
@@ -306,6 +310,7 @@ describe("EvidenceServer", () => {
           claim: "Y",
           sourceThoughtNumber: 4,
           claimBasis: "fact",
+          evidenceCount: 0,
         },
       ]);
     });
@@ -359,7 +364,8 @@ describe("EvidenceServer", () => {
         evidence,
       });
       expect(parse(result).nextAction).toBe(
-        "Resolve branches [2] before finishing sequentialthinking",
+        "Resolve branches [2] before finishing sequentialthinking. " +
+          "If they belong to an abandoned task, call cycle=proposed with newSession=true",
       );
     });
 
@@ -415,6 +421,313 @@ describe("EvidenceServer", () => {
     });
   });
 
+  describe("branch identity", () => {
+    it.each<Cycle>(["testing", "validated", "rejected"])(
+      "rejects a changed claim on cycle=%s",
+      (cycle) => {
+        const server = seeded("testing");
+        const result = server.processEntry({
+          ...base,
+          cycle,
+          claim: "X holds everywhere",
+          evidence,
+          rejectionReason: "r",
+        });
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toContain(
+          "claim of branch 1 is fixed at proposed",
+        );
+        expect(result.content[0].text).toContain("derivedFromBranchId");
+      },
+    );
+
+    it("rejects a changed claim on re-inspection after validated", () => {
+      const server = seeded("validated");
+      const result = server.processEntry({
+        ...base,
+        cycle: "testing",
+        claim: "Y",
+      });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("is fixed at proposed");
+    });
+
+    it("rejects a changed sourceThoughtNumber", () => {
+      const server = seeded("proposed");
+      const result = server.processEntry({
+        ...base,
+        cycle: "testing",
+        sourceThoughtNumber: 2,
+      });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain(
+        "sourceThoughtNumber of branch 1 is fixed at 1",
+      );
+    });
+
+    it("rejects adding sourceBranchId to a main-line branch", () => {
+      const server = seeded("proposed");
+      const result = server.processEntry({
+        ...base,
+        cycle: "testing",
+        sourceBranchId: "alt",
+      });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain(
+        "sourceBranchId of branch 1 is fixed at (main line, omitted)",
+      );
+    });
+
+    it("rejects dropping sourceBranchId from a side-line branch", () => {
+      const server = new EvidenceServer();
+      server.processEntry({ ...base, sourceBranchId: "alt" });
+      const result = server.processEntry({ ...base, cycle: "testing" });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain(
+        "sourceBranchId of branch 1 is fixed at alt",
+      );
+    });
+
+    it("allows the changed claim on a derived branch", () => {
+      const server = seeded("testing");
+      server.processEntry({
+        ...base,
+        cycle: "rejected",
+        rejectionReason: "too weak",
+      });
+      const result = server.processEntry({
+        ...base,
+        branchId: "2",
+        derivedFromBranchId: "1",
+        claim: "X holds everywhere",
+        sourceThoughtNumber: 2,
+      });
+      expect(result.isError).toBeUndefined();
+    });
+  });
+
+  describe("evidence accumulation", () => {
+    it("validates with evidence sent on an earlier testing call", () => {
+      const server = seeded("proposed");
+      server.processEntry({ ...base, cycle: "testing", evidence });
+      const result = server.processEntry({ ...base, cycle: "validated" });
+      expect(result.isError).toBeUndefined();
+    });
+
+    it("combines guessed and non-guessed evidence across calls", () => {
+      const server = seeded("proposed");
+      server.processEntry({
+        ...base,
+        cycle: "testing",
+        evidence: [
+          { kind: "observed", ref: "server.log", summary: "seen in logs" },
+        ],
+      });
+      const result = server.processEntry({
+        ...base,
+        cycle: "validated",
+        evidence: [{ kind: "guessed", summary: "follows from A" }],
+      });
+      expect(result.isError).toBeUndefined();
+    });
+
+    it("rejects validated when every collected item is guessed", () => {
+      const server = seeded("proposed");
+      server.processEntry({
+        ...base,
+        cycle: "testing",
+        evidence: [{ kind: "guessed", summary: "follows from A" }],
+      });
+      const result = server.processEntry({ ...base, cycle: "validated" });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain(
+        "validated requires at least one non-guessed evidence",
+      );
+    });
+
+    it("does not share evidence between branches", () => {
+      const server = seeded("proposed");
+      server.processEntry({ ...base, cycle: "testing", evidence });
+      server.processEntry({ ...base, branchId: "2", claim: "Y" });
+      server.processEntry({
+        ...base,
+        branchId: "2",
+        claim: "Y",
+        cycle: "testing",
+      });
+      const result = server.processEntry({
+        ...base,
+        branchId: "2",
+        claim: "Y",
+        cycle: "validated",
+      });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain(
+        "at least one evidence item collected on branch 2",
+      );
+    });
+
+    it("does not keep evidence of a rejected call", () => {
+      const server = seeded("proposed");
+      server.processEntry({ ...base, cycle: "validated", evidence });
+      server.processEntry({ ...base, cycle: "testing" });
+      const result = server.processEntry({ ...base, cycle: "validated" });
+      expect(result.isError).toBe(true);
+    });
+
+    it("restates validated with finalConclusion without resending evidence", () => {
+      const server = seeded("validated");
+      const result = server.processEntry({
+        ...base,
+        cycle: "validated",
+        needsMoreInspect: false,
+        finalConclusion: "X holds",
+      });
+      expect(result.isError).toBeUndefined();
+    });
+
+    it("reports evidenceCount per branch", () => {
+      const server = seeded("proposed");
+      server.processEntry({ ...base, cycle: "testing", evidence });
+      const result = server.processEntry({
+        ...base,
+        cycle: "testing",
+        evidence: [
+          { kind: "referenced", ref: "README.md", summary: "says so" },
+          { kind: "guessed", summary: "follows from A" },
+        ],
+      });
+      expect(parse(result).branches[0].evidenceCount).toBe(3);
+    });
+
+    it("does not carry evidence over a new session", () => {
+      const server = seeded("proposed");
+      server.processEntry({ ...base, cycle: "testing", evidence });
+      server.processEntry({ ...base, newSession: true });
+      server.processEntry({ ...base, cycle: "testing" });
+      const result = server.processEntry({ ...base, cycle: "validated" });
+      expect(result.isError).toBe(true);
+    });
+  });
+
+  describe("session", () => {
+    const finish = (server: EvidenceServer) =>
+      server.processEntry({
+        ...base,
+        cycle: "validated",
+        evidence,
+        needsMoreInspect: false,
+        finalConclusion: "X holds",
+      });
+
+    it("reports the closing session in the finalConclusion response", () => {
+      const data = parse(finish(seeded("validated")));
+      expect(data.branches.map((b) => b.branchId)).toEqual(["1"]);
+      expect(data.historyLength).toBe(4);
+      expect(data.discardedBranchIds).toEqual([]);
+    });
+
+    it("starts a new session after finalConclusion, so branch ids can be reused", () => {
+      const server = seeded("validated");
+      finish(server);
+      const result = server.processEntry({ ...base, claim: "next task" });
+      expect(result.isError).toBeUndefined();
+      const data = parse(result);
+      expect(data.historyLength).toBe(1);
+      expect(data.branches).toEqual([
+        expect.objectContaining({ branchId: "1", claim: "next task" }),
+      ]);
+    });
+
+    it("rejects a second finalConclusion after the session is closed", () => {
+      const server = seeded("validated");
+      finish(server);
+      const result = finish(server);
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("Invalid transition");
+    });
+
+    it("does not reset the state when finalConclusion is rejected", () => {
+      const server = seeded("validated");
+      server.processEntry({ ...base, branchId: "2" });
+      expect(finish(server).isError).toBe(true);
+      const data = parse(server.processEntry({ ...base, cycle: "testing" }));
+      expect(data.unresolvedBranchIds).toEqual(["1", "2"]);
+    });
+
+    it("discards abandoned branches with newSession=true", () => {
+      const server = seeded("testing");
+      server.processEntry({ ...base, branchId: "2" });
+      const result = server.processEntry({
+        ...base,
+        claim: "new task",
+        newSession: true,
+      });
+      expect(result.isError).toBeUndefined();
+      const data = parse(result);
+      expect(data.discardedBranchIds).toEqual(["1", "2"]);
+      expect(data.unresolvedBranchIds).toEqual(["1"]);
+      expect(data.historyLength).toBe(1);
+      expect(data.branches).toEqual([
+        expect.objectContaining({ branchId: "1", claim: "new task" }),
+      ]);
+    });
+
+    it("allows finalConclusion after abandoned branches are discarded", () => {
+      const server = seeded("testing");
+      server.processEntry({ ...base, newSession: true });
+      server.processEntry({ ...base, cycle: "testing", evidence });
+      expect(finish(server).isError).toBeUndefined();
+    });
+
+    it("returns empty discardedBranchIds without newSession", () => {
+      const server = seeded("validated");
+      const data = parse(server.processEntry({ ...base, branchId: "2" }));
+      expect(data.discardedBranchIds).toEqual([]);
+    });
+
+    it("accepts newSession=true on an empty state", () => {
+      const server = new EvidenceServer();
+      const data = parse(server.processEntry({ ...base, newSession: true }));
+      expect(data.discardedBranchIds).toEqual([]);
+    });
+
+    it.each<Cycle>(["testing", "validated", "rejected"])(
+      "rejects newSession=true with cycle=%s and keeps the state",
+      (cycle) => {
+        const server = seeded("testing");
+        const result = server.processEntry({
+          ...base,
+          cycle,
+          evidence,
+          rejectionReason: "r",
+          newSession: true,
+        });
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toContain(
+          "newSession=true is allowed only with cycle=proposed",
+        );
+        const data = parse(server.processEntry({ ...base, cycle: "testing" }));
+        expect(data.historyLength).toBe(3);
+      },
+    );
+
+    it("keeps the old state when a newSession call is rejected", () => {
+      const server = seeded("testing");
+      const result = server.processEntry({
+        ...base,
+        branchId: "2",
+        derivedFromBranchId: "1",
+        newSession: true,
+      });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("does not exist");
+      const data = parse(server.processEntry({ ...base, cycle: "testing" }));
+      expect(data.historyLength).toBe(3);
+      expect(data.branches.map((b) => b.branchId)).toEqual(["1"]);
+    });
+  });
+
   describe("logging", () => {
     it("logs a formatted box to stderr when logging is enabled", () => {
       delete process.env.DISABLE_EVIDENCE_LOGGING;
@@ -448,14 +761,20 @@ describe("EvidenceServer", () => {
         ...base,
         cycle: "rejected",
         rejectionReason: "contradicted",
-        needsMoreInspect: false,
-        finalConclusion: "X is false",
       });
       server.processEntry({
         ...base,
         branchId: "2",
         derivedFromBranchId: "1",
         cycle: "proposed",
+      });
+      server.processEntry({
+        ...base,
+        branchId: "2",
+        cycle: "rejected",
+        rejectionReason: "also contradicted",
+        needsMoreInspect: false,
+        finalConclusion: "X is false",
       });
       const all = spy.mock.calls.map((c) => c[0] as string).join("\n");
       expect(all).toContain("evidence[referenced]: says so (README.md)");
