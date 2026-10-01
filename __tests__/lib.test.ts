@@ -369,6 +369,28 @@ describe("EvidenceServer", () => {
       );
     });
 
+    it("lists every other unresolved branch after rejecting one", () => {
+      const server = seeded("testing");
+      server.processEntry({ ...base, branchId: "2" });
+      server.processEntry({ ...base, branchId: "3" });
+      const result = server.processEntry({
+        ...base,
+        cycle: "rejected",
+        rejectionReason: "no",
+      });
+      expect(parse(result).nextAction).toBe(
+        "Resolve branches [2, 3] before finishing sequentialthinking. " +
+          "If they belong to an abandoned task, call cycle=proposed with newSession=true",
+      );
+    });
+
+    it("asks to continue when re-inspecting a validated branch", () => {
+      const server = seeded("validated");
+      expect(
+        parse(server.processEntry({ ...base, cycle: "testing" })).nextAction,
+      ).toBe("Continue inspecting branch 1");
+    });
+
     it("asks for finalConclusion when everything is resolved", () => {
       const server = seeded("testing");
       const result = server.processEntry({
