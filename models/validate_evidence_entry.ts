@@ -1,3 +1,4 @@
+import { RET_VAL } from "../const/return_value.js";
 import {
   ALLOWED_TRANSITIONS,
   EvidenceEntry,
@@ -36,9 +37,13 @@ export class ValidateEvidenceEntry {
     if (ALLOWED_TRANSITIONS[prev].has(cycle)) return null;
 
     const allowed = [...ALLOWED_TRANSITIONS[prev]].join(", ");
-    const from = prev === "new" ? "a new branch" : prev;
 
-    return `Invalid transition ${from} -> ${cycle} on branch ${branchId}. Allowed next cycle: ${allowed}`;
+    return RET_VAL.validation.transition.invalid_transition(
+      prev,
+      cycle,
+      branchId,
+      allowed,
+    );
   }
 
   private checkIdentity(): string | null {
@@ -48,14 +53,19 @@ export class ValidateEvidenceEntry {
     if (!first) return null;
 
     if (first.claim !== this.entry.claim) {
-      return `claim of branch ${branchId} is fixed at proposed ("${first.claim}"). Reject it and start a new branch with derivedFromBranchId to change the claim`;
+      return RET_VAL.validation.identity.claim_fixed(branchId, first.claim);
     }
     if (first.sourceThoughtNumber !== this.entry.sourceThoughtNumber) {
-      return `sourceThoughtNumber of branch ${branchId} is fixed at ${first.sourceThoughtNumber}. Reject it and start a new branch with derivedFromBranchId to change the source`;
+      return RET_VAL.validation.identity.source_thought_fixed(
+        branchId,
+        first.sourceThoughtNumber,
+      );
     }
     if (first.sourceBranchId !== this.entry.sourceBranchId) {
-      const fixed = first.sourceBranchId ?? "(main line, omitted)";
-      return `sourceBranchId of branch ${branchId} is fixed at ${fixed}. Reject it and start a new branch with derivedFromBranchId to change the source`;
+      return RET_VAL.validation.identity.source_branch_fixed(
+        branchId,
+        first.sourceBranchId,
+      );
     }
 
     return null;
@@ -77,13 +87,16 @@ export class ValidateEvidenceEntry {
     const { branchId, claimBasis } = this.entry;
 
     if (!collected.length) {
-      return `validated requires at least one evidence item collected on branch ${branchId}. Add evidence[] or use cycle=testing`;
+      return RET_VAL.validation.validated.no_evidence(branchId);
     }
     if (collected.every((v) => v.kind === "guessed")) {
-      return `validated requires at least one non-guessed evidence item (referenced, measured, or observed) collected on branch ${branchId}. Keep cycle=testing until you have one`;
+      return RET_VAL.validation.validated.only_guessed(branchId);
     }
     if (claimBasis !== "fact" && claimBasis !== "inference") {
-      return `validated requires claimBasis=fact or inference on branch ${branchId} (got ${claimBasis}). Keep cycle=testing until claimBasis is fact or inference`;
+      return RET_VAL.validation.validated.invalid_claim_basis(
+        branchId,
+        claimBasis,
+      );
     }
     return null;
   }
@@ -91,7 +104,7 @@ export class ValidateEvidenceEntry {
   private checkRejected(): string | null {
     if (this.entry.rejectionReason?.trim()) return null;
 
-    return `rejected requires rejectionReason on branch ${this.entry.branchId}`;
+    return RET_VAL.validation.rejected.no_reason(this.entry.branchId);
   }
 
   private checkDerivedFrom(): string | null {
@@ -100,10 +113,13 @@ export class ValidateEvidenceEntry {
 
     if (derivedFromBranchId === undefined) return null;
     if (derivedFromBranchId === branchId) {
-      return `derivedFromBranchId must differ from branchId (${branchId})`;
+      return RET_VAL.validation.derived_from.same_as_branch(branchId);
     }
     if (!knownBranchIds.includes(derivedFromBranchId)) {
-      return `derivedFromBranchId ${derivedFromBranchId} does not exist. Known branches: ${knownBranchIds.join(", ") || "(none)"}`;
+      return RET_VAL.validation.derived_from.not_exist(
+        derivedFromBranchId,
+        knownBranchIds,
+      );
     }
 
     return null;
@@ -117,10 +133,10 @@ export class ValidateEvidenceEntry {
 
     const ids = unresolved.join(", ");
     if (finalConclusion !== undefined) {
-      return `finalConclusion is not allowed while branches [${ids}] are unresolved. Validate or reject them first`;
+      return RET_VAL.validation.session.final_while_unresolved(ids);
     }
     if (!needsMoreInspect) {
-      return `needsMoreInspect=false but branches [${ids}] are unresolved. Set needsMoreInspect=true or resolve them first`;
+      return RET_VAL.validation.session.stop_while_unresolved(ids);
     }
 
     return null;

@@ -5,6 +5,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { CLAIM_BASIS_KINDS, CYCLES, EvidenceServer } from "./lib.js";
 import { SERVER_VERSION } from "./version.js";
+import { RET_VAL } from "./const/return_value.js";
 
 const coercedBoolean = z
   .union([z.boolean(), z.string()])
@@ -14,16 +15,15 @@ const coercedBoolean = z
     if (val.toLowerCase() === "false") return false;
     ctx.addIssue({
       code: "custom",
-      message: `Expected boolean or "true"/"false" string, received "${val}"`,
+      message: RET_VAL.input.invalid_boolean(val),
     });
     return z.NEVER;
   });
 
-const blankError = "Must not be empty or whitespace only";
+const blankError = RET_VAL.input.blank;
 const text = z.string().trim().min(1, { error: blankError });
 
-const refError =
-  "ref is required unless kind=guessed. Give the path, URL, or command that yielded the evidence, or use kind=guessed";
+const refError = RET_VAL.input.ref_required;
 
 const cycleSchema = z.enum(CYCLES);
 

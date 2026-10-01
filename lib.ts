@@ -1,90 +1,39 @@
 import chalk from 'chalk';
-import {
-  BranchSummary,
-  Cycle,
-  EvidenceEntry,
-  EvidenceItem,
-  EvidenceResponse,
-  PrevCycle,
-  ToolResult,
-} from './models/types.js';
+import { EvidenceEntry, EvidenceResponse, ToolResult } from './models/types.js';
 import { ValidateEvidenceEntry, ValidationContext } from './models/validate_evidence_entry.js';
 import { McpAction } from './models/mcp_action.js';
+import { ServerInstance } from './models/server_instance.js';
+import { RET_VAL } from './const/return_value.js';
 
 export * from './models/types.js';
 
-const UNRESOLVED: ReadonlySet<Cycle> = new Set<Cycle>(['proposed', 'testing']);
-
 export class EvidenceServer {
-  private history: EvidenceEntry[] = [];
-  private branches: Record<string, EvidenceEntry[]> = {};
+  private instance: ServerInstance;
   private disableLogging: boolean;
   private mcpAction: McpAction;
 
   constructor() {
+    this.instance = new ServerInstance();
     this.disableLogging = process.env.DISABLE_EVIDENCE_LOGGING?.toLowerCase() === 'true';
     this.mcpAction = new McpAction();
   }
 
   private nextAction(entry: EvidenceEntry): string {
-    return this.mcpAction.next(entry, this.unresolvedBranchIds());
+    return this.mcpAction.next(entry, this.instance.unresolvedBranchIds());
   }
 
   private failure(error: string): ToolResult {
     return this.mcpAction.failure(error);
   }
 
-  private reset(): string[] {
-    const ids = Object.keys(this.branches);
-    this.history = [];
-    this.branches = {};
-    return ids;
-  }
-
-  private latest(branchId: string): EvidenceEntry | undefined {
-    const entries = this.branches[branchId];
-    return entries?.length ? entries[entries.length - 1] : undefined;
-  }
-
-  private currentCycle(branchId: string): PrevCycle {
-    return this.latest(branchId)?.cycle ?? 'new';
-  }
-
-  private unresolvedBranchIds(pending?: EvidenceEntry): string[] {
-    const ids = new Set(Object.keys(this.branches));
-    if (pending) ids.add(pending.branchId);
-    return [...ids].filter((id) => {
-      const cycle = pending && pending.branchId === id ? pending.cycle : this.currentCycle(id);
-      return cycle !== 'new' && UNRESOLVED.has(cycle);
-    });
-  }
-
-  private evidenceOf(branchId: string): EvidenceItem[] {
-    return (this.branches[branchId] ?? []).flatMap((e) => e.evidence ?? []);
-  }
-
   private context(entry: EvidenceEntry): ValidationContext {
     return {
-      prev: this.currentCycle(entry.branchId),
-      first: this.branches[entry.branchId]?.[0],
-      collected: [...this.evidenceOf(entry.branchId), ...(entry.evidence ?? [])],
-      knownBranchIds: Object.keys(this.branches),
-      unresolved: this.unresolvedBranchIds(entry),
+      prev: this.instance.currentCycle(entry.branchId),
+      first: this.instance.first(entry.branchId),
+      collected: [...this.instance.evidenceOf(entry.branchId), ...(entry.evidence ?? [])],
+      knownBranchIds: this.instance.branchIds(),
+      unresolved: this.instance.unresolvedBranchIds(entry),
     };
-  }
-
-  private branchSummaries(): BranchSummary[] {
-    return Object.keys(this.branches).map((branchId) => {
-      const last = this.latest(branchId)!;
-      return {
-        branchId,
-        cycle: last.cycle,
-        claim: last.claim,
-        sourceThoughtNumber: last.sourceThoughtNumber,
-        claimBasis: last.claimBasis,
-        evidenceCount: this.evidenceOf(branchId).length,
-      };
-    });
   }
 
   private formatEntry(e: EvidenceEntry): string {
@@ -124,20 +73,19 @@ export class EvidenceServer {
   public processEntry(input: EvidenceEntry): ToolResult {
     try {
       if (input.newSession && input.cycle !== 'proposed') {
-        return this.failure(`newSession=true is allowed only with cycle=proposed (got ${input.cycle})`);
+        return this.failure(RET_VAL.lib.new_session_not_proposed(input.cycle));
       }
 
-      const saved = { history: this.history, branches: this.branches };
-      const discarded = input.newSession ? this.reset() : [];
+      const saved = this.instance;
+      const discarded = input.newSession ? saved.branchIds() : [];
+      if (input.newSession) this.instance = new ServerInstance();
       const error = new ValidateEvidenceEntry(input, this.context(input)).validate();
       if (error) {
-        this.history = saved.history;
-        this.branches = saved.branches;
+        this.instance = saved;
         return this.failure(error);
       }
 
-      this.history.push(input);
-      (this.branches[input.branchId] ??= []).push(input);
+      this.instance.append(input);
 
       if (!this.disableLogging) {
         console.error(this.formatEntry(input));
@@ -148,16 +96,16 @@ export class EvidenceServer {
         cycle: input.cycle,
         sourceThoughtNumber: input.sourceThoughtNumber,
         needsMoreInspect: input.needsMoreInspect,
-        branches: this.branchSummaries(),
-        unresolvedBranchIds: this.unresolvedBranchIds(),
-        historyLength: this.history.length,
+        branches: this.instance.branchSummaries(),
+        unresolvedBranchIds: this.instance.unresolvedBranchIds(),
+        historyLength: this.instance.historyLength(),
         nextAction: this.nextAction(input),
         ...(input.finalConclusion !== undefined ? { finalConclusion: input.finalConclusion } : {}),
         discardedBranchIds: discarded,
       };
 
       if (input.finalConclusion !== undefined) {
-        this.reset();
+        this.instance = new ServerInstance();
       }
 
       return {

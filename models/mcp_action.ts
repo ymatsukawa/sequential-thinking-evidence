@@ -1,31 +1,27 @@
-import { ToolResult } from "./types.js";
-import { EvidenceEntry } from "./types.js";
+import { RET_VAL } from "../const/return_value.js";
+import { EvidenceEntry, ToolResult } from "./types.js";
 
 export class McpAction {
-  constructor() {}
-
   next(entry: EvidenceEntry, unresolvedBranchIds: string[]): string {
     if (entry.finalConclusion !== undefined) {
-      return "Done. Return to sequentialthinking and finish";
+      return RET_VAL.mcp_action.next.done;
     }
 
     if (entry.cycle === "proposed") {
-      return `Inspect branch ${entry.branchId}, then call again with cycle=testing`;
+      return RET_VAL.mcp_action.next.inspect(entry.branchId);
     }
 
     if (entry.cycle === "testing" && entry.needsMoreInspect) {
-      return `Continue inspecting branch ${entry.branchId}`;
+      return RET_VAL.mcp_action.next.continue_inspect(entry.branchId);
     }
 
-    const unresolved = unresolvedBranchIds;
-    if (unresolved.length > 0) {
-      return (
-        `Resolve branches [${unresolved.join(", ")}] before finishing sequentialthinking. ` +
-        "If they belong to an abandoned task, call cycle=proposed with newSession=true"
+    if (unresolvedBranchIds.length > 0) {
+      return RET_VAL.mcp_action.next.resolve_unresolved(
+        unresolvedBranchIds.join(", "),
       );
     }
 
-    return "All branches resolved. Call again with finalConclusion and needsMoreInspect=false";
+    return RET_VAL.mcp_action.next.all_resolved;
   }
 
   failure(error: string): ToolResult {
