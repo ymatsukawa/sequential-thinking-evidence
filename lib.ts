@@ -91,20 +91,21 @@ export class EvidenceServer {
         console.error(this.formatEntry(input));
       }
 
+      const closing = input.finalConclusion !== undefined;
       const response: EvidenceResponse = {
         branchId: input.branchId,
         cycle: input.cycle,
         sourceThoughtNumber: input.sourceThoughtNumber,
-        needsMoreInspect: input.needsMoreInspect,
+        needsMoreInspect: closing ? false : input.needsMoreInspect,
         branches: this.instance.branchSummaries(),
         unresolvedBranchIds: this.instance.unresolvedBranchIds(),
         historyLength: this.instance.historyLength(),
         nextAction: this.nextAction(input),
-        ...(input.finalConclusion !== undefined ? { finalConclusion: input.finalConclusion } : {}),
+        ...(closing ? { finalConclusion: input.finalConclusion } : {}),
         discardedBranchIds: discarded,
       };
 
-      if (input.finalConclusion !== undefined) {
+      if (closing) {
         this.instance = new ServerInstance();
       }
 

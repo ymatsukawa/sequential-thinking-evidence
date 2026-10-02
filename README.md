@@ -55,5 +55,8 @@ npm install && npm run build
 Think {WHAT AND HOW} with sequential-thinking using sequential-thinking-evidence
 ```
 
+## Remarks
+This mcp is unit use only. Parallel running with multiple sub agents is not assured.
+
 ## License
 MIT

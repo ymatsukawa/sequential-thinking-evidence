@@ -134,6 +134,68 @@ describe.skipIf(!existsSync(distIndexPath))(
       expect(structured.sourceThoughtNumber).toBe(3);
     });
 
+    describe("type coercion", () => {
+      const proposed = {
+        cycle: "proposed",
+        sourceThoughtNumber: 1,
+        claim: "X",
+        inspection: "plan",
+        claimBasis: "fact",
+        needsMoreInspect: true,
+      };
+      const call = (args: Record<string, unknown>) =>
+        client.callTool({
+          name: "sequentialthinking-evidence",
+          arguments: { ...proposed, ...args },
+        });
+      const textOf = (result: Awaited<ReturnType<typeof call>>) =>
+        (result.content as Array<{ type: string; text: string }>)[0].text;
+
+      it("accepts evidence sent as a JSON string", async () => {
+        const result = await call({
+          branchId: "j1",
+          evidence: JSON.stringify([
+            { kind: "measured", ref: "npm test", summary: "ok" },
+          ]),
+        });
+        expect(result.isError).toBeFalsy();
+        const structured = result.structuredContent as {
+          branches: Array<{ branchId: string; evidenceCount: number }>;
+        };
+        expect(
+          structured.branches.find((b) => b.branchId === "j1")!.evidenceCount,
+        ).toBe(1);
+      });
+
+      it("rejects evidence sent as a non-JSON string", async () => {
+        const result = await call({ branchId: "j2", evidence: "not json" });
+        expect(result.isError).toBe(true);
+        expect(textOf(result)).toContain("expected array");
+      });
+
+      it("rejects a boolean sourceThoughtNumber", async () => {
+        const result = await call({
+          branchId: "n1",
+          sourceThoughtNumber: true,
+        });
+        expect(result.isError).toBe(true);
+        expect(textOf(result)).toContain("sourceThoughtNumber");
+      });
+
+      it("advertises evidence as an array and sourceThoughtNumber as an integer", async () => {
+        const { tools } = await client.listTools();
+        const tool = tools.find(
+          (t) => t.name === "sequentialthinking-evidence",
+        )!;
+        const props = tool.inputSchema.properties as Record<
+          string,
+          { type?: string }
+        >;
+        expect(props.evidence.type).toBe("array");
+        expect(props.sourceThoughtNumber.type).toBe("integer");
+      });
+    });
+
     describe("blank strings and ref", () => {
       const proposed = {
         cycle: "proposed",
@@ -190,6 +252,37 @@ describe.skipIf(!existsSync(distIndexPath))(
         expect(textOf(result)).toContain(
           "Must not be empty or whitespace only",
         );
+      });
+
+      it("rejects a blank branchId", async () => {
+        const result = await call({ branchId: "   " });
+        expect(result.isError).toBe(true);
+        expect(textOf(result)).toContain(
+          "Must not be empty or whitespace only",
+        );
+      });
+
+      it("trims branchId so ' t1 ' and 't1' are the same branch", async () => {
+        await call({ branchId: " t1 " });
+        const result = await call({ branchId: "t1", cycle: "testing" });
+        expect(result.isError).toBeFalsy();
+        const structured = result.structuredContent as {
+          branches: Array<{ branchId: string }>;
+        };
+        expect(
+          structured.branches.filter((b) => b.branchId.includes("t1")),
+        ).toEqual([expect.objectContaining({ branchId: "t1" })]);
+      });
+
+      it("treats a blank sourceBranchId as omitted", async () => {
+        await call({ branchId: "s1", sourceBranchId: "" });
+        const result = await call({ branchId: "s1", cycle: "testing" });
+        expect(result.isError).toBeFalsy();
+      });
+
+      it("treats a blank derivedFromBranchId as omitted", async () => {
+        const result = await call({ branchId: "d1", derivedFromBranchId: " " });
+        expect(result.isError).toBeFalsy();
       });
 
       it.each(["referenced", "measured", "observed"])(

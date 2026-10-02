@@ -78,6 +78,39 @@ describe("ValidateEvidenceEntry", () => {
       );
     });
 
+    it("rejects an added derivedFromBranchId", () => {
+      expect(
+        validate({ derivedFromBranchId: "2" }, { knownBranchIds: ["1", "2"] }),
+      ).toContain("derivedFromBranchId of branch 1 is fixed at (none)");
+    });
+
+    it("rejects a changed derivedFromBranchId", () => {
+      expect(
+        validate(
+          { derivedFromBranchId: "3" },
+          {
+            first: { ...base, cycle: "proposed", derivedFromBranchId: "2" },
+            knownBranchIds: ["1", "2", "3"],
+          },
+        ),
+      ).toContain("derivedFromBranchId of branch 1 is fixed at 2");
+    });
+
+    it.each([undefined, "2"])(
+      "accepts derivedFromBranchId=%s after proposed with 2",
+      (derivedFromBranchId) => {
+        expect(
+          validate(
+            { derivedFromBranchId },
+            {
+              first: { ...base, cycle: "proposed", derivedFromBranchId: "2" },
+              knownBranchIds: ["1", "2"],
+            },
+          ),
+        ).toBeNull();
+      },
+    );
+
     it("skips identity checks on a new branch", () => {
       expect(
         validate(

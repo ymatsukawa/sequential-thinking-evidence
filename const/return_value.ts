@@ -30,6 +30,8 @@ export const RET_VAL = {
         `sourceThoughtNumber of branch ${branchId} is fixed at ${sourceThoughtNumber}. Reject it and start a new branch with derivedFromBranchId to change the source`,
       source_branch_fixed: (branchId: string, sourceBranchId?: string) =>
         `sourceBranchId of branch ${branchId} is fixed at ${sourceBranchId ?? "(main line, omitted)"}. Reject it and start a new branch with derivedFromBranchId to change the source`,
+      derived_from_fixed: (branchId: string, derivedFromBranchId?: string) =>
+        `derivedFromBranchId of branch ${branchId} is fixed at ${derivedFromBranchId ?? "(none)"}. Omit it or send the same value`,
     },
     validated: {
       no_evidence: (branchId: string) =>

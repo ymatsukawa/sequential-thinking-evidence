@@ -67,6 +67,16 @@ export class ValidateEvidenceEntry {
         first.sourceBranchId,
       );
     }
+    const { derivedFromBranchId } = this.entry;
+    if (
+      derivedFromBranchId !== undefined &&
+      derivedFromBranchId !== first.derivedFromBranchId
+    ) {
+      return RET_VAL.validation.identity.derived_from_fixed(
+        branchId,
+        first.derivedFromBranchId,
+      );
+    }
 
     return null;
   }

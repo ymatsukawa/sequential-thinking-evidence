@@ -526,6 +526,31 @@ describe("EvidenceServer", () => {
       });
       expect(result.isError).toBeUndefined();
     });
+
+    it("rejects a cyclic lineage by fixing derivedFromBranchId at proposed", () => {
+      const server = seeded("proposed");
+      server.processEntry({ ...base, branchId: "2", derivedFromBranchId: "1" });
+      const result = server.processEntry({
+        ...base,
+        cycle: "testing",
+        derivedFromBranchId: "2",
+      });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain(
+        "derivedFromBranchId of branch 1 is fixed at (none)",
+      );
+    });
+
+    it("keeps derivedFromBranchId when later calls omit it", () => {
+      const server = seeded("proposed");
+      server.processEntry({ ...base, branchId: "2", derivedFromBranchId: "1" });
+      const result = server.processEntry({
+        ...base,
+        branchId: "2",
+        cycle: "testing",
+      });
+      expect(result.isError).toBeUndefined();
+    });
   });
 
   describe("evidence accumulation", () => {
@@ -647,6 +672,39 @@ describe("EvidenceServer", () => {
       expect(data.branches.map((b) => b.branchId)).toEqual(["1"]);
       expect(data.historyLength).toBe(4);
       expect(data.discardedBranchIds).toEqual([]);
+    });
+
+    it("reports needsMoreInspect=false in the finalConclusion response", () => {
+      expect(parse(finish(seeded("validated"))).needsMoreInspect).toBe(false);
+    });
+
+    it("accepts finalConclusion with needsMoreInspect=true and reports false", () => {
+      const server = seeded("validated");
+      const result = server.processEntry({
+        ...base,
+        cycle: "validated",
+        needsMoreInspect: true,
+        finalConclusion: "X holds",
+      });
+      expect(result.isError).toBeUndefined();
+      const data = parse(result);
+      expect(data.needsMoreInspect).toBe(false);
+      expect(data.finalConclusion).toBe("X holds");
+    });
+
+    it("rejects finalConclusion with needsMoreInspect=true while branches are unresolved", () => {
+      const server = seeded("validated");
+      server.processEntry({ ...base, branchId: "2" });
+      const result = server.processEntry({
+        ...base,
+        cycle: "validated",
+        needsMoreInspect: true,
+        finalConclusion: "X holds",
+      });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain(
+        "finalConclusion is not allowed",
+      );
     });
 
     it("starts a new session after finalConclusion, so branch ids can be reused", () => {

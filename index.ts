@@ -23,6 +23,21 @@ const coercedBoolean = z
 const blankError = RET_VAL.input.blank;
 const text = z.string().trim().min(1, { error: blankError });
 
+const blankToUndefined = (v: unknown) =>
+  typeof v === "string" && v.trim() === "" ? undefined : v;
+const optionalText = z.preprocess(blankToUndefined, text.optional());
+
+const parseJsonString = (v: unknown) => {
+  if (typeof v !== "string") return v;
+  try {
+    return JSON.parse(v);
+  } catch {
+    return v;
+  }
+};
+const digitsToNumber = (v: unknown) =>
+  typeof v === "string" && /^\d+$/.test(v.trim()) ? Number(v) : v;
+
 const refError = RET_VAL.input.ref_required;
 
 const cycleSchema = z.enum(CYCLES);
@@ -97,37 +112,34 @@ Rules:
 - One branchId per claim. Reuse it across cycles of the same claim.
 - claim, sourceThoughtNumber and sourceBranchId are fixed at proposed. Send the same values on every call of the branch.
   To change them, reject the branch and start a new one with derivedFromBranchId.
+- derivedFromBranchId is set at proposed. Omit it or send the same value on later calls.
 - Set claimBasis on every call: fact | assumption | inference | opinion.
 - sourceThoughtNumber is the sequential-thinking thoughtNumber the claim comes from.
   sourceBranchId is the sequential-thinking branchId; omit it for the main line.
 - needsMoreInspect=true while any branch is still proposed or testing.
-- When every branch is validated or rejected, call once more with finalConclusion and needsMoreInspect=false.
+- When every branch is validated or rejected, call once more with finalConclusion.
+  finalConclusion ends the inspection; needsMoreInspect is treated as false.
   That call may restate the last branch's terminal cycle without resending evidence.
 - Invalid input is rejected with an error message that says how to fix it. Fix and call again.
 - The response tells you what to do next in nextAction. Follow it.`,
     inputSchema: {
       cycle: cycleSchema.describe("Lifecycle state of this claim"),
-      branchId: z.string().min(1).describe("Evidence branch id, e.g. '1', '2'"),
-      sourceThoughtNumber: z.coerce
-        .number()
-        .int()
-        .min(1)
+      branchId: text.describe("Evidence branch id, e.g. '1', '2'"),
+      sourceThoughtNumber: z
+        .preprocess(digitsToNumber, z.number().int().min(1))
         .describe("sequential-thinking thoughtNumber this claim comes from"),
-      sourceBranchId: z
-        .string()
-        .optional()
-        .describe("sequential-thinking branchId, omit for the main line"),
-      derivedFromBranchId: z
-        .string()
-        .optional()
-        .describe("Evidence branchId this branch derives from"),
+      sourceBranchId: optionalText.describe(
+        "sequential-thinking branchId, omit for the main line",
+      ),
+      derivedFromBranchId: optionalText.describe(
+        "Evidence branchId this branch derives from",
+      ),
       claim: text.describe("One falsifiable sentence under inspection"),
       inspection: text.describe(
         "What is being inspected now, or the inspection plan when proposed",
       ),
       evidence: z
-        .array(evidenceItemSchema)
-        .optional()
+        .preprocess(parseJsonString, z.array(evidenceItemSchema).optional())
         .describe(
           "New evidence found in this call. The server keeps evidence of earlier calls on the same branch",
         ),
